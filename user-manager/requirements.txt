@@ -2,3 +2,4 @@ flask
 grpcio
 grpcio-tools
 PyMySQL
+bcrypt

@@ -1,0 +1,7 @@
+-- Creazione tabella utenti
+CREATE TABLE IF NOT EXISTS users (
+    email VARCHAR(255) PRIMARY KEY,
+    nome VARCHAR(100) NOT NULL,
+    cognome VARCHAR(100) NOT NULL,
+    password_hash VARCHAR(255) NOT NULL
+);
