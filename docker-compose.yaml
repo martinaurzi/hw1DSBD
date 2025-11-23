@@ -25,6 +25,7 @@ services:
       MYSQL_PASSWORD: rusurz
     volumes:
       - data_db_data:/var/lib/mysql
+      - ./init_data_db.sql:/docker-entrypoint-initdb.d/init_data_db.sql
     healthcheck:
       test: [ "CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p$$MYSQL_ROOT_PASSWORD" ]
       interval: 5s
@@ -68,13 +69,18 @@ services:
       - MYSQL_PASSWORD=rusurz
       - MYSQL_DATABASE=dataDb
       - LISTEN_PORT=5002 # REST API
+      - GRPC_HOST=user-manager
       - GRPC_PORT=50051
+      - OPENSKY_CLIENT_ID=${OPENSKY_CLIENT_ID}
+      - OPENSKY_CLIENT_SECRET=${OPENSKY_CLIENT_SECRET}
     depends_on:
-      user-manager:
-          condition: service_healthy
+      #user-manager:
+       #   condition: service_healthy
       data-db:
           condition: service_healthy
     restart: always
+    env_file:
+      - .env
     networks:
       - net
 
