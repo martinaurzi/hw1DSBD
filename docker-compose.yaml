@@ -10,7 +10,7 @@ services:
       MYSQL_PASSWORD: rusurz
     volumes:
       - user_db_data:/var/lib/mysql
-      - ./init_data_db.sql:/docker-entrypoint-initdb.d/init_data_db.sql
+      - ./init_user_db.sql:/docker-entrypoint-initdb.d/init_user_db.sql
     healthcheck:
       test: [ "CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p$$MYSQL_ROOT_PASSWORD" ]
       interval: 5s
