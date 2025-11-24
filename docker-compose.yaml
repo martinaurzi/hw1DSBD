@@ -3,7 +3,7 @@ version: "3.9"
 services:
   user-db:
     image: mysql:8.0
-    command: --default-authentication-plugin=mysql_native_password
+    #command: --default-authentication-plugin=mysql_native_password
     environment:
       MYSQL_ROOT_PASSWORD: toor
       MYSQL_DATABASE: userDb
@@ -38,7 +38,11 @@ services:
         - net
 
   user-manager:
-    build: ./user-manager
+    build: #./user-manager
+      context: .
+      dockerfile: ./user-manager/Dockerfile
+      args:
+        BUILD_DIR: user-manager
     container_name: user-manager
     ports:
       - "5003:5003"
@@ -63,7 +67,11 @@ services:
       - net
 
   data-collector:
-    build: ./data-collector
+    build: #./data-collector
+      context: .
+      dockerfile: ./data-collector/Dockerfile
+      args:
+        BUILD_DIR: data-collector
     container_name: data-collector
     ports:
       - "5002:5002"

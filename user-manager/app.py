@@ -1,18 +1,19 @@
-from os.path import exists
-
 from flask import Flask, jsonify, request
 import os
 import pymysql
 import bcrypt
-import threading
+
 import grpc
 from concurrent import futures
-import user_pb2_grpc, user_pb2
+import threading
 
+import user_service_pb2
+import user_service_pb2_grpc
 
 app = Flask(__name__)
 
 LISTEN_PORT = int(os.getenv("LISTEN_PORT", 5003))
+LISTEN_PORT_GRPC = os.getenv("LISTEN_PORT_GRPC")
 
 # configurazione variabili di ambiente per connessione a MySQL
 MYSQL_HOST = os.getenv("MYSQL_HOST")
@@ -99,22 +100,44 @@ def delete_user(email):
     else:
         return jsonify({"error": "MySQL non connesso"}), 503
 
-class UserManagerService(user_pb2_grpc.UserManagerServicer):
-    def CheckUser(self, request, context):
+class UserManagerService(user_service_pb2_grpc.UserServiceServicer):
+    def CheckIfUserExists(self, request, context):
         email = request.email
-        mysql_conn=get_connection()
+        mysql_conn = get_connection()
         if mysql_conn:
             with mysql_conn.cursor() as cursor:
                 cursor.execute("SELECT * FROM users WHERE email=%s", (email,))
                 user = cursor.fetchone()
-                if user is not None:
-                    existing = user
+                exists = user is not None  # booleano True/False
             mysql_conn.close()
-            return user_pb2.UserResponse(exists=existing)
+            return user_service_pb2.UserCheckResponse(
+                exists=exists,
+                message="Utente trovato" if exists else "Utente non trovato"
+            )
         else:
             context.set_code(grpc.StatusCode.UNAVAILABLE)
             context.set_details("MySQL non connesso")
-            return user_pb2.UserResponse(exists=False)
+            return user_service_pb2.UserCheckResponse(
+                exists=False,
+                message="Errore: MySQL non connesso"
+            )
+
+def serve():
+    server = grpc.server(futures.ThreadPoolExecutor(max_workers=10)) #creo server grpc con thread pool di 10 worker threads
+
+    user_service_pb2_grpc.add_UserServiceServicer_to_server(UserManagerService(), server)
+
+    server.add_insecure_port(f'[::]:{LISTEN_PORT_GRPC}') #leghiamo server alla porta
+
+    server.start()
+    print(f"UserService è pronto ed in ascolto sulla porta {LISTEN_PORT_GRPC}")
+
+    server.wait_for_termination()
+
 
 if __name__ == "__main__":
+    # Avvia gRPC in un thread separato
+    threading.Thread(target=serve, daemon=True).start()
+    # Avvia Flask
     app.run(host="0.0.0.0", port=LISTEN_PORT, debug=True)
+
