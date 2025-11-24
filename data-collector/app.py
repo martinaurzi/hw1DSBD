@@ -5,6 +5,7 @@ import requests
 import grpc
 import user_service_pb2
 import user_service_pb2_grpc
+from datetime import datetime, timezone
 
 app = Flask(__name__)
 
@@ -44,6 +45,7 @@ def get_connection():
         print(f"[ERRORE] Impossibile connettersi a MySQL: {e}")
         return None
 
+# Verifica se l'utente esiste comunicando tramite il canale gRPC con user-manager
 def check_if_exists(email: str) -> bool:
     with grpc.insecure_channel(USER_MANAGER_ADDRESS) as channel:
         stub = user_service_pb2_grpc.UserServiceStub(channel)
@@ -70,6 +72,40 @@ def get_opensky_token():
     except requests.exceptions.RequestException as e:
         return jsonify(f"[ERRORE]: Non è stato possibile recuperare il token: {e}")
 
+def get_user_airports(mysql_conn, email: str) -> list[str]:
+    try:
+        with mysql_conn.cursor() as cursor:
+            # Recupero gli aeroporti di interesse dell'utente
+            sql_get_aeroporti = "SELECT icao_aeroporto FROM user_airports WHERE email_utente = %s"
+            cursor.execute(sql_get_aeroporti, (email, ))
+
+            rows = cursor.fetchall()
+
+            icao_list = []
+            for row in rows:
+                icao = row["icao_aeroporto"]
+                icao_list.append(icao)
+
+            return icao_list
+
+    except pymysql.MySQLError as e:
+        mysql_conn.rollback()
+        return []
+
+def get_begin_unix_time() -> int:
+    current_time_utc = datetime.now(timezone.utc)
+
+    current_time_timestamp = int(current_time_utc.timestamp())
+
+    seven_days_in_seconds = 7 * 24 * 60 * 60
+
+    return current_time_timestamp - seven_days_in_seconds
+
+def get_end_unix_time() -> int:
+    current_time_utc = datetime.now(timezone.utc)
+
+    return int(current_time_utc.timestamp())
+
 @app.route("/")
 def home():
     return jsonify("Hello, Data Collector"), 200
@@ -92,10 +128,10 @@ def add_interest():
                 try:
                     with mysql_conn.cursor() as cursor:
                         for icao in aeroporti_icao:
-                            sql_aeroporto = "INSERT IGNORE INTO `airport` (`icao`) VALUES (%s)"
+                            sql_aeroporto = "INSERT IGNORE INTO airport (icao) VALUES (%s)"
                             cursor.execute(sql_aeroporto, (icao, ))
 
-                            sql_interest = "INSERT IGNORE INTO `user_airports` (`email_utente`, `icao`) VALUES (%s, %s)"
+                            sql_interest = "INSERT IGNORE INTO user_airports (email_utente, icao) VALUES (%s, %s)"
                             cursor.execute(sql_interest, (email_utente, icao))
 
                     mysql_conn.commit()
@@ -103,19 +139,64 @@ def add_interest():
                 except pymysql.MySQLError as e:
                     mysql_conn.rollback()
                     return jsonify(f"[ERRORE] MySQL: {e}")
-                    raise
 
                 except Exception as e:
                     mysql_conn.rollback()
                     return jsonify(f"[ERRORE]: {e}")
-                    raise
 
-            # Deve essere chiamata ogni 30 minuti
-            token = get_opensky_token()
+                token = get_opensky_token()
 
-            #... Fare chiamata a opensky una volta ottenuto il token
+                if token:
+                    icao_list = get_user_airports(mysql_conn, email_utente)
 
-            mysql_conn.close()
+                    headers = {
+                        "Authorization": f"Bearer {token}"
+                    }
+
+                    begin = get_begin_unix_time()
+                    end = get_end_unix_time()
+
+                    for icao in icao_list:
+                        params = {
+                            "airport": icao,
+                            "begin": begin,
+                            "end": end
+                        }
+
+                        try:
+                            response = requests.get(OPENSKY_DEPARTURE_ENDPOINT, params=params, headers=headers)
+                            response.raise_for_status()
+
+                            data_departures = response.json()
+
+                            # Aggiorno i voli in partenza da ogni aeroporto
+                            if data_departures:
+                                for departure in data_departures:
+                                    icao_aereo = departure.get("icao24")
+                                    first_seen = departure.get("firstSeen")
+                                    aeroporto_partenza = departure.get("estDepartureAirport")
+                                    last_seen = departure.get("lastSeen")
+                                    aeroporto_arrivo = departure.get("estArrivalAirport")
+
+                                    try:
+                                        sql_partenza = ("INSERT IGNORE INTO flight (icao_aereo, first_seen, aeroporto_partenza, "
+                                                        "last_seen, aeroporto_arrivo) VALUES (%s, %d, %s, %d, %s)")
+                                        cursor.execute(sql_partenza, (icao_aereo, first_seen, aeroporto_partenza, last_seen, aeroporto_arrivo))
+
+                                        mysql_conn.commit()
+
+                                    except pymysql.MySQLError as e:
+                                        mysql_conn.rollback()
+                                        return jsonify(f"[ERRORE] MySQL: {e}")
+
+                                # Voli di ritorno
+
+                        except requests.exceptions.RequestException as e:
+                            return jsonify(f"[ERRORE]: Non è stato possibile recuperare i voli in partenza: {e}")
+
+                mysql_conn.close()
+            else:
+                return jsonify("Errore: impossibile connettersi al db"), 500
         else:
             # Utente non esiste
             return jsonify("L'utente non esiste"), 404

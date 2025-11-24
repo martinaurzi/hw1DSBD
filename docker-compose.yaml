@@ -15,6 +15,8 @@ services:
       interval: 5s
       timeout: 10s
       retries: 5
+    networks:
+      - net
 
   data-db:
     image: mysql:8.0
@@ -31,9 +33,15 @@ services:
       interval: 5s
       timeout: 10s
       retries: 5
+    networks:
+      - net
 
   user-manager:
-    build: ./user-manager
+    build: #./user-manager
+      context: .
+      dockerfile: ./user-manager/Dockerfile
+      args:
+        BUILD_DIR: user-manager
     container_name: userManager
     ports:
       - "5003:5003"
@@ -58,7 +66,11 @@ services:
       - net
 
   data-collector:
-    build: ./data-collector
+    build: #./data-collector
+      context: .
+      dockerfile: ./data-collector/Dockerfile
+      args:
+        BUILD_DIR: data-collector
     container_name: dataCollector
     ports:
       - "5002:5002"
@@ -71,8 +83,6 @@ services:
       - LISTEN_PORT=5002 # REST API
       - GRPC_HOST=user-manager
       - GRPC_PORT=50051
-      - OPENSKY_CLIENT_ID=${OPENSKY_CLIENT_ID}
-      - OPENSKY_CLIENT_SECRET=${OPENSKY_CLIENT_SECRET}
     depends_on:
       #user-manager:
        #   condition: service_healthy
@@ -80,7 +90,7 @@ services:
           condition: service_healthy
     restart: always
     env_file:
-      - .env
+      - .env # Per CLIENT_ID e CLIENT_SECRET Opensky
     networks:
       - net
 
