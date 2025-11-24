@@ -1,11 +1,18 @@
+from os.path import exists
+
 from flask import Flask, jsonify, request
 import os
 import pymysql
 import bcrypt
+import threading
+import grpc
+from concurrent import futures
+import user_pb2_grpc, user_pb2
+
 
 app = Flask(__name__)
 
-LISTEN_PORT = int(os.getenv("LISTEN_PORT"))
+LISTEN_PORT = int(os.getenv("LISTEN_PORT", 5003))
 
 # configurazione variabili di ambiente per connessione a MySQL
 MYSQL_HOST = os.getenv("MYSQL_HOST")
@@ -38,7 +45,7 @@ def home():
     # L'oggetto serializzato sarà {"message": "Hello"}
     return jsonify(message="Hello"), 200
 
-@app.route("/create", methods=["POST"])
+@app.route("/users", methods=["POST"])
 def create_user():
     data = request.json
     email = data.get("email")
@@ -71,6 +78,43 @@ def create_user():
         return jsonify({"message": "Utente registrato con successo", "email": email}), 201
     else:
         return jsonify({"error": "MySQl non connesso"}), 503
+
+@app.route("/users/<email>", methods=["DELETE"])
+def delete_user(email):
+    mysql_conn = get_connection()
+    if mysql_conn:
+        with mysql_conn.cursor() as cursor:
+            cursor.execute("SELECT * FROM users WHERE email=%s", (email,)) #(email,) è una tupla con un solo elemento e le query con cursor richiedono una lista o tupla
+            user = cursor.fetchone()
+            if not user:
+                return jsonify({"error": "Utente non trovato"}), 404
+            try:
+                cursor.execute("DELETE FROM users WHERE email=%s", (email,))
+                mysql_conn.commit()
+            except Exception as e:
+                mysql_conn.rollback()
+                return jsonify({"error": f"Errore DB: {e}"}), 500
+        mysql_conn.close()
+        return jsonify({"message": f"Utente {email} cancellato con successo"}), 201 #f prima di " serve per far si che python sostituisca a email il suo valore
+    else:
+        return jsonify({"error": "MySQL non connesso"}), 503
+
+class UserManagerService(user_pb2_grpc.UserManagerServicer):
+    def CheckUser(self, request, context):
+        email = request.email
+        mysql_conn=get_connection()
+        if mysql_conn:
+            with mysql_conn.cursor() as cursor:
+                cursor.execute("SELECT * FROM users WHERE email=%s", (email,))
+                user = cursor.fetchone()
+                if user is not None:
+                    existing = user
+            mysql_conn.close()
+            return user_pb2.UserResponse(exists=existing)
+        else:
+            context.set_code(grpc.StatusCode.UNAVAILABLE)
+            context.set_details("MySQL non connesso")
+            return user_pb2.UserResponse(exists=False)
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=LISTEN_PORT, debug=True)
