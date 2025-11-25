@@ -1,0 +1,14 @@
+syntax = "proto3";
+
+message UserCheckRequest {
+  string email = 1;
+}
+
+message UserCheckResponse {
+  bool exists = 1; // True = utente esiste nel db
+  string message = 2;
+}
+
+service UserService {
+  rpc CheckIfUserExists(UserCheckRequest) returns (UserCheckResponse);
+}
