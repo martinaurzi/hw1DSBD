@@ -23,8 +23,8 @@ MYSQL_DATABASE = os.getenv("MYSQL_DATABASE")
 OPENSKY_CLIENT_ID = os.getenv("OPENSKY_CLIENT_ID")
 OPENSKY_CLIENT_SECRET = os.getenv("OPENSKY_CLIENT_SECRET")
 
-OPENSKY_DEPARTURE_ENDPOINT = "https://opensky-network.org/api//flights/departure?"
-OPENSKY_ARRIVAL_ENDPOINT = "https://opensky-network.org/api//flights/arrival?"
+OPENSKY_DEPARTURE_ENDPOINT = "https://opensky-network.org/api//flights/departure"
+OPENSKY_ARRIVAL_ENDPOINT = "https://opensky-network.org/api//flights/arrival"
 OPENSKY_TOKEN_ENDPOINT = "https://auth.opensky-network.org/auth/realms/opensky-network/protocol/openid-connect/token"
 
 TIMEOUT_SECONDS = 10
@@ -178,21 +178,51 @@ def add_interest():
                                     last_seen = departure.get("lastSeen")
                                     aeroporto_arrivo = departure.get("estArrivalAirport")
 
-                                    try:
-                                        sql_partenza = ("INSERT IGNORE INTO flight (icao_aereo, first_seen, aeroporto_partenza, "
-                                                        "last_seen, aeroporto_arrivo) VALUES (%s, %d, %s, %d, %s)")
-                                        cursor.execute(sql_partenza, (icao_aereo, first_seen, aeroporto_partenza, last_seen, aeroporto_arrivo))
+                                    with mysql_conn as cursor:
+                                        try:
+                                            sql_partenza = ("INSERT IGNORE INTO flight (icao_aereo, first_seen, aeroporto_partenza, "
+                                                            "last_seen, aeroporto_arrivo) VALUES (%s, %s, %s, %s, %s)")
+                                            cursor.execute(sql_partenza, (icao_aereo, first_seen, aeroporto_partenza, last_seen, aeroporto_arrivo))
 
-                                        mysql_conn.commit()
+                                            mysql_conn.commit()
 
-                                    except pymysql.MySQLError as e:
-                                        mysql_conn.rollback()
-                                        return jsonify(f"[ERRORE] MySQL: {e}")
-
-                                # Voli di ritorno
+                                        except pymysql.MySQLError as e:
+                                            mysql_conn.rollback()
+                                            return jsonify(f"[ERRORE] MySQL: {e}")
 
                         except requests.exceptions.RequestException as e:
                             return jsonify(f"[ERRORE]: Non è stato possibile recuperare i voli in partenza: {e}")
+
+                        #voli di arrivo
+                        try:
+                            response = requests.get(OPENSKY_ARRIVAL_ENDPOINT, params=params, headers=headers)
+                            response.raise_for_status()
+
+                            data_arrivals = response.json()
+
+                            # Aggiorno i voli in arrivo da ogni aeroporto
+                            if data_arrivals:
+                                for arrival in data_arrivals:
+                                    icao_aereo = arrival.get("icao24")
+                                    first_seen = arrival.get("firstSeen")
+                                    aeroporto_partenza = arrival.get("estDepartureAirport")
+                                    last_seen = arrival.get("lastSeen")
+                                    aeroporto_arrivo = arrival.get("estArrivalAirport")
+
+                                    with mysql_conn as cursor:
+                                        try:
+                                            sql_arrivo = ("INSERT IGNORE INTO flight (icao_aereo, first_seen, aeroporto_partenza, "
+                                                            "last_seen, aeroporto_arrivo) VALUES (%s, %s, %s, %s, %s)")
+                                            cursor.execute(sql_arrivo, (icao_aereo, first_seen, aeroporto_partenza, last_seen, aeroporto_arrivo))
+
+                                            mysql_conn.commit()
+
+                                        except pymysql.MySQLError as e:
+                                            mysql_conn.rollback()
+                                            return jsonify(f"[ERRORE] MySQL: {e}")
+
+                        except requests.exceptions.RequestException as e:
+                            return jsonify(f"[ERRORE]: Non è stato possibile recuperare i voli in arrivo: {e}")
 
                 mysql_conn.close()
             else:
@@ -203,6 +233,38 @@ def add_interest():
 
     except grpc.RpcError:
         return jsonify("Errore gRPC")
+
+@app.route("/airport/<icao>/last", methods=["GET"])
+def get_last_flight(icao):
+    mysql_conn = get_connection()
+    if mysql_conn:
+        with mysql_conn.cursor() as cursor:
+            sql_last_flight = "SELECT * FROM flight WHERE aeroporto_partenza = %s OR aeroporto_arrivo = %s ORDER BY last_seen DESC LIMIT 1"
+            cursor.execute(sql_last_flight, (icao, icao))
+            volo = cursor.fetchone()
+        mysql_conn.close()
+        return jsonify(volo), 200 if volo else (jsonify("Nessun volo trovato"), 404)
+    else:
+        return jsonify("Errore: impossibile connettersi al db"), 500
+
+@app.route("/airport/<icao>/media", methods=["GET"])
+def get_media_voli(icao):
+    days = int(request.args.get("giorni", 7))  # default 7 giorni se non c'è argomento nella get es GET /airport/LIRF/media?giorni=10
+    now = get_end_unix_time()
+    start = now - days * 86400 #86400 secondi in un giorno
+
+    mysql_conn = get_connection()
+    if mysql_conn:
+        with mysql_conn.cursor() as cursor:
+            sql_media_voli = "SELECT COUNT(*) AS totale FROM flight WHERE (aeroporto_partenza = %s OR aeroporto_arrivo = %s) AND first_seen >= %s"
+            cursor.execute(sql_media_voli, (icao, icao, start))
+
+            totale = cursor.fetchone()["totale"]
+        mysql_conn.close()
+        media = totale / days
+        return jsonify({"media_voli_giornaliera": media}), 200
+    else:
+        return jsonify("Errore: impossibile connettersi al db"), 500
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=LISTEN_PORT, debug=True)
