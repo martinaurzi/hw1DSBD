@@ -13,7 +13,7 @@ import user_service_pb2_grpc
 app = Flask(__name__)
 
 LISTEN_PORT = int(os.getenv("LISTEN_PORT", 5003))
-LISTEN_PORT_GRPC = os.getenv("LISTEN_PORT_GRPC")
+LISTEN_PORT_GRPC = int(os.getenv("LISTEN_PORT_GRPC"))
 
 # configurazione variabili di ambiente per connessione a MySQL
 MYSQL_HOST = os.getenv("MYSQL_HOST")
