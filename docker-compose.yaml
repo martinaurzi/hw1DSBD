@@ -88,8 +88,8 @@ services:
       - OPENSKY_CLIENT_ID=${OPENSKY_CLIENT_ID}
       - OPENSKY_CLIENT_SECRET=${OPENSKY_CLIENT_SECRET}
     depends_on:
-      #user-manager:
-       #   condition: service_healthy
+      user-manager:
+          condition: service_healthy
       data-db:
           condition: service_healthy
     restart: always

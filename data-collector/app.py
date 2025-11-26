@@ -1,3 +1,5 @@
+import time
+
 from flask import Flask, jsonify, request
 import os
 import pymysql.cursors
@@ -23,8 +25,8 @@ MYSQL_DATABASE = os.getenv("MYSQL_DATABASE")
 OPENSKY_CLIENT_ID = os.getenv("OPENSKY_CLIENT_ID")
 OPENSKY_CLIENT_SECRET = os.getenv("OPENSKY_CLIENT_SECRET")
 
-OPENSKY_DEPARTURE_ENDPOINT = "https://opensky-network.org/api//flights/departure"
-OPENSKY_ARRIVAL_ENDPOINT = "https://opensky-network.org/api//flights/arrival"
+OPENSKY_DEPARTURE_ENDPOINT = "https://opensky-network.org/api/flights/departure"
+OPENSKY_ARRIVAL_ENDPOINT = "https://opensky-network.org/api/flights/arrival"
 OPENSKY_TOKEN_ENDPOINT = "https://auth.opensky-network.org/auth/realms/opensky-network/protocol/openid-connect/token"
 
 TIMEOUT_SECONDS = 10
@@ -70,7 +72,8 @@ def get_opensky_token():
         return data.get("access_token")
 
     except requests.exceptions.RequestException as e:
-        return jsonify(f"[ERRORE]: Non è stato possibile recuperare il token: {e}")
+        print(f"[ERRORE]: Non è stato possibile recuperare il token: {e}")
+        return None
 
 def get_user_airports(mysql_conn, email: str) -> list[str]:
     try:
@@ -89,7 +92,6 @@ def get_user_airports(mysql_conn, email: str) -> list[str]:
             return icao_list
 
     except pymysql.MySQLError as e:
-        mysql_conn.rollback()
         return []
 
 def get_begin_unix_time() -> int:
@@ -97,14 +99,12 @@ def get_begin_unix_time() -> int:
 
     current_time_timestamp = int(current_time_utc.timestamp())
 
-    seven_days_in_seconds = 7 * 24 * 60 * 60
+    two_days_in_seconds = 2 * 24 * 60 * 60
 
-    return current_time_timestamp - seven_days_in_seconds
+    return current_time_timestamp - two_days_in_seconds
 
 def get_end_unix_time() -> int:
-    current_time_utc = datetime.now(timezone.utc)
-
-    return int(current_time_utc.timestamp())
+    return int(time.time())
 
 @app.route("/")
 def home():
@@ -128,17 +128,17 @@ def add_interest():
                 try:
                     with mysql_conn.cursor() as cursor:
                         for icao in aeroporti_icao:
-                            sql_aeroporto = "INSERT IGNORE INTO airport (icao) VALUES (%s)"
-                            cursor.execute(sql_aeroporto, (icao, ))
+                            #sql_aeroporto = "INSERT IGNORE INTO airport (icao) VALUES (%s)"
+                            #cursor.execute(sql_aeroporto, (icao, ))
 
-                            sql_interest = "INSERT IGNORE INTO user_airports (email_utente, icao) VALUES (%s, %s)"
+                            sql_interest = "INSERT IGNORE INTO user_airports (email_utente, icao_aeroporto) VALUES (%s, %s)"
                             cursor.execute(sql_interest, (email_utente, icao))
 
                     mysql_conn.commit()
 
                 except pymysql.MySQLError as e:
                     mysql_conn.rollback()
-                    return jsonify(f"[ERRORE] MySQL: {e}")
+                    return jsonify(f"[ERRORE] Non è stato possibile aggiornare gli interssi dell'utente: {e}")
 
                 except Exception as e:
                     mysql_conn.rollback()
@@ -178,7 +178,7 @@ def add_interest():
                                     last_seen = departure.get("lastSeen")
                                     aeroporto_arrivo = departure.get("estArrivalAirport")
 
-                                    with mysql_conn as cursor:
+                                    with mysql_conn.cursor() as cursor:
                                         try:
                                             sql_partenza = ("INSERT IGNORE INTO flight (icao_aereo, first_seen, aeroporto_partenza, "
                                                             "last_seen, aeroporto_arrivo) VALUES (%s, %s, %s, %s, %s)")
@@ -191,7 +191,7 @@ def add_interest():
                                             return jsonify(f"[ERRORE] MySQL: {e}")
 
                         except requests.exceptions.RequestException as e:
-                            return jsonify(f"[ERRORE]: Non è stato possibile recuperare i voli in partenza: {e}")
+                            return jsonify(f"[ERRORE]: Non è stato possibile recuperare i voli in partenza: {e}"), 400
 
                         #voli di arrivo
                         try:
@@ -233,6 +233,28 @@ def add_interest():
 
     except grpc.RpcError:
         return jsonify("Errore gRPC")
+
+    return jsonify("Interessi dell'utente inseriti e voli aggiornati"), 200
+
+
+"""@app.route("/<email>/fights", methods=["GET"])
+def get_flights(email):
+    mysql_conn = get_connection()
+
+    if mysql_conn:
+        with mysql_conn.cursor() as cursor:
+            try:
+                sql_get_flights = "SELECT * FROM flights f JOIN user_airports u WHERE ua.email_utente=%s"
+                cursor.execute(sql_get_flights, (email, ))
+
+                rows = cursor.fetchall()
+
+                return jsonify(rows)
+
+            except pymysql.MySQLError as e:
+                mysql_conn.rollback()
+                return jsonify(f"[ERRORE] MySQL: {e}")
+"""
 
 @app.route("/airport/<icao>/last", methods=["GET"])
 def get_last_flight(icao):

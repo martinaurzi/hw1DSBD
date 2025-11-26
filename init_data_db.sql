@@ -1,12 +1,7 @@
-CREATE TABLE IF NOT EXISTS airport(
-	icao VARCHAR(6) PRIMARY KEY
-);
-
 CREATE TABLE IF NOT EXISTS user_airports(
 	email_utente VARCHAR(255),
 	icao_aeroporto VARCHAR(6),
-	PRIMARY KEY(email_utente, icao_aeroporto),
-	FOREIGN KEY(icao_aeroporto) REFERENCES airport(icao)
+	PRIMARY KEY(email_utente, icao_aeroporto)
 );
 
 CREATE TABLE IF NOT EXISTS flight(
@@ -22,9 +17,5 @@ CREATE TABLE IF NOT EXISTS flight(
     estArrivalAirportHorizDistance INT NULL,
     estArrivalAirportVertDistance INT NULL,
     departureAirportCandidatesCount INT NULL,
-    arrivalAirportCandidatesCount INT NULL,
-    INDEX indx_partenza(aeroporto_partenza),
-    INDEX indx_arrivo(aeroporto_arrivo),
-    FOREIGN KEY(aeroporto_partenza) REFERENCES airport(icao),
-    FOREIGN KEY(aeroporto_arrivo) REFERENCES airport(icao)
+    arrivalAirportCandidatesCount INT NULL
 );
