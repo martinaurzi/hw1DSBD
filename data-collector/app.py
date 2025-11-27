@@ -9,6 +9,8 @@ import user_service_pb2
 import user_service_pb2_grpc
 from datetime import datetime, timezone
 
+import threading
+
 app = Flask(__name__)
 
 LISTEN_PORT = int(os.getenv("LISTEN_PORT", 5002))
@@ -106,10 +108,136 @@ def get_begin_unix_time() -> int:
 def get_end_unix_time() -> int:
     return int(time.time())
 
+def update_flights(mysql_conn, email_utente, opensky_endpoint, token):
+    if token:
+        icao_list = get_user_airports(mysql_conn, email_utente)
+
+        headers = {
+            "Authorization": f"Bearer {token}"
+        }
+
+        begin = get_begin_unix_time()
+        end = get_end_unix_time()
+
+        for icao in icao_list:
+            params = {
+                "airport": icao,
+                "begin": begin,
+                "end": end
+            }
+
+            try:
+                response = requests.get(opensky_endpoint, params=params, headers=headers)
+                response.raise_for_status()
+
+                data_flights = response.json()
+
+                # Aggiorno i voli da ogni aeroporto
+                if data_flights:
+                    for flights in data_flights:
+                        icao_aereo = flights.get("icao24")
+                        first_seen = flights.get("firstSeen")
+                        aeroporto_partenza = flights.get("estDepartureAirport")
+                        last_seen = flights.get("lastSeen")
+                        aeroporto_arrivo = flights.get("estArrivalAirport")
+
+                        with mysql_conn.cursor() as cursor:
+                            try:
+                                sql_flights = ("INSERT IGNORE INTO flight (icao_aereo, first_seen, aeroporto_partenza, "
+                                                "last_seen, aeroporto_arrivo) VALUES (%s, %s, %s, %s, %s)")
+                                cursor.execute(sql_flights, (icao_aereo, first_seen, aeroporto_partenza, last_seen, aeroporto_arrivo))
+
+                                mysql_conn.commit()
+
+                            except pymysql.MySQLError as e:
+                                mysql_conn.rollback()
+                                return jsonify({"errore": f"MySQL: {e}"}), 500
+
+            except requests.exceptions.RequestException as e:
+                return jsonify({"errore": f"Non è stato possibile recuperare i voli: {e}"}), 502
+
+    else:
+        return jsonify({"errore": "token OPENSKY non valido"}), 401
+
+def update_all_flights():
+    mysql_conn = get_connection()
+    if not mysql_conn:
+        return jsonify({"errore": "impossibile connettersi al db"}), 500
+
+    token = get_opensky_token()
+    if not token:
+        return jsonify({"errore": "token OPENSKY non valido"}), 500
+
+    with mysql_conn.cursor() as cursor:
+        cursor.execute("SELECT DISTINCT email_utente FROM user_airports")
+        users = cursor.fetchall()
+
+    for u in users:
+        email = u["email_utente"]
+        update_flights(mysql_conn, email, OPENSKY_DEPARTURE_ENDPOINT, token)
+        update_flights(mysql_conn, email, OPENSKY_ARRIVAL_ENDPOINT, token)
+
+    mysql_conn.close()
+    return jsonify({"message": "Voli aggiornati"}), 200
+
+def scheduler_job():
+    while True:
+        print("[Scheduler] Aggiornamento voli in corso...")
+        update_all_flights()
+        time.sleep(12 * 3600)   # ogni 12 ore
+
 @app.route("/")
 def home():
     return jsonify("Hello, Data Collector"), 200
 
+@app.route("/user/interests", methods=["POST"])
+def add_interest():
+    data = request.json
+
+    email_utente = data["email_utente"]
+    aeroporti_icao = data['aeroporti_icao']
+
+    try:
+        if check_if_exists(email_utente):
+            # Utente esiste
+            mysql_conn = get_connection()
+
+            # Inserisco gli aeroporti indicati dall'utente nella tabella airport
+            if mysql_conn:
+                try:
+                    with mysql_conn.cursor() as cursor:
+                        for icao in aeroporti_icao:
+
+                            sql_interest = "INSERT IGNORE INTO user_airports (email_utente, icao_aeroporto) VALUES (%s, %s)"
+                            cursor.execute(sql_interest, (email_utente, icao))
+
+                    mysql_conn.commit()
+
+                except pymysql.MySQLError as e:
+                    mysql_conn.rollback()
+                    return jsonify(f"[ERRORE] Non è stato possibile aggiornare gli interssi dell'utente: {e}")
+
+                except Exception as e:
+                    mysql_conn.rollback()
+                    return jsonify(f"[ERRORE]: {e}")
+
+                token = get_opensky_token()
+                update_flights(mysql_conn, email_utente, OPENSKY_DEPARTURE_ENDPOINT, token)#aggiorna le partenze
+                update_flights(mysql_conn, email_utente, OPENSKY_ARRIVAL_ENDPOINT, token)#aggiorna gli arrivi
+
+                mysql_conn.close()
+            else:
+                return jsonify({"errore": "impossibile connettersi al db"}), 500
+        else:
+            # Utente non esiste
+            return jsonify({"errore": "L'utente non esiste"}), 404
+
+    except grpc.RpcError:
+        return jsonify({"errore": "Errore gRPC"}), 502
+
+    return jsonify({"message": "Interessi dell'utente inseriti e voli aggiornati"}), 200
+
+""" OLD VERSION
 @app.route("/user/interests", methods=["POST"])
 def add_interest():
     data = request.json
@@ -209,7 +337,7 @@ def add_interest():
                                     last_seen = arrival.get("lastSeen")
                                     aeroporto_arrivo = arrival.get("estArrivalAirport")
 
-                                    with mysql_conn as cursor:
+                                    with mysql_conn.cursor() as cursor:
                                         try:
                                             sql_arrivo = ("INSERT IGNORE INTO flight (icao_aereo, first_seen, aeroporto_partenza, "
                                                             "last_seen, aeroporto_arrivo) VALUES (%s, %s, %s, %s, %s)")
@@ -235,7 +363,7 @@ def add_interest():
         return jsonify("Errore gRPC")
 
     return jsonify("Interessi dell'utente inseriti e voli aggiornati"), 200
-
+    """
 
 """@app.route("/<email>/fights", methods=["GET"])
 def get_flights(email):
@@ -289,4 +417,5 @@ def get_media_voli(icao):
         return jsonify("Errore: impossibile connettersi al db"), 500
 
 if __name__ == "__main__":
+    threading.Thread(target=scheduler_job, daemon=True).start()
     app.run(host="0.0.0.0", port=LISTEN_PORT, debug=True)
