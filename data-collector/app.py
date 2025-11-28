@@ -11,6 +11,13 @@ from datetime import datetime, timezone
 
 import threading
 
+import logging
+
+logging.basicConfig(
+    level=logging.INFO,
+    format='[%(asctime)s] [%(levelname)s] %(message)s',
+)
+
 app = Flask(__name__)
 
 LISTEN_PORT = int(os.getenv("LISTEN_PORT", 5002))
@@ -151,39 +158,49 @@ def update_flights(mysql_conn, email_utente, opensky_endpoint, token, days):
 
                             except pymysql.MySQLError as e:
                                 mysql_conn.rollback()
-                                return jsonify({"errore": f"MySQL: {e}"}), 500
+                                logging.error(f"Errore MySQL {e}")
+                                #return jsonify({"errore": f"MySQL: {e}"}), 500
 
             except requests.exceptions.RequestException as e:
-                return jsonify({"errore": f"Non è stato possibile recuperare i voli: {e}"}), 502
+                logging.error(f"Non è stato possibile recuperare i voli: {e}")
+                #return jsonify({"errore": f"Non è stato possibile recuperare i voli: {e}"}), 502
 
     else:
-        return jsonify({"errore": "token OPENSKY non valido"}), 401
+        logging.error("Token OPENSKY non valido")
+        #return jsonify({"errore": "token OPENSKY non valido"}), 401
 
 def update_all_flights():
     mysql_conn = get_connection()
     if not mysql_conn:
-        return jsonify({"errore": "impossibile connettersi al db"}), 500
+        logging.error("Scheduler: impossibile connettersi al db")
+        #return jsonify({"errore": "impossibile connettersi al db"}), 500
 
     token = get_opensky_token()
-    if not token:
-        return jsonify({"errore": "token OPENSKY non valido"}), 500
+    if token:
+        with mysql_conn.cursor() as cursor:
+            cursor.execute("SELECT DISTINCT email_utente FROM user_airports")
+            users = cursor.fetchall()
 
-    with mysql_conn.cursor() as cursor:
-        cursor.execute("SELECT DISTINCT email_utente FROM user_airports")
-        users = cursor.fetchall()
-
-    for u in users:
-        email = u["email_utente"]
-        update_flights(mysql_conn, email, OPENSKY_DEPARTURE_ENDPOINT, token, 4)
-        update_flights(mysql_conn, email, OPENSKY_ARRIVAL_ENDPOINT, token, 1)
+        for u in users:
+            email = u["email_utente"]
+            update_flights(mysql_conn, email, OPENSKY_DEPARTURE_ENDPOINT, token, 4)
+            update_flights(mysql_conn, email, OPENSKY_ARRIVAL_ENDPOINT, token, 1)
+    else:
+        logging.error("Scheduler: impossibile connettersi al db")
+        #return jsonify({"errore": "token OPENSKY non valido"}), 500
 
     mysql_conn.close()
-    return jsonify({"message": "Voli aggiornati"}), 200
+
+    logging.error("Scheduler: Voli aggiornati")
+    #return jsonify({"message": "Voli aggiornati"}), 200
 
 def scheduler_job():
     while True:
         print("[Scheduler] Aggiornamento voli in corso...")
-        update_all_flights()
+
+        with app.app_context():
+            update_all_flights()
+
         time.sleep(12 * 3600)   # ogni 12 ore
 
 @app.route("/")
