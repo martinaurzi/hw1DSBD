@@ -96,19 +96,19 @@ def get_user_airports(mysql_conn, email: str) -> list[str]:
     except pymysql.MySQLError as e:
         return []
 
-def get_begin_unix_time() -> int:
+def get_begin_unix_time(days) -> int:
     current_time_utc = datetime.now(timezone.utc)
 
     current_time_timestamp = int(current_time_utc.timestamp())
 
-    two_days_in_seconds = 2 * 24 * 60 * 60
+    days_in_seconds = days * 24 * 60 * 60
 
-    return current_time_timestamp - two_days_in_seconds
+    return current_time_timestamp - days_in_seconds
 
 def get_end_unix_time() -> int:
     return int(time.time())
 
-def update_flights(mysql_conn, email_utente, opensky_endpoint, token):
+def update_flights(mysql_conn, email_utente, opensky_endpoint, token, days):
     if token:
         icao_list = get_user_airports(mysql_conn, email_utente)
 
@@ -116,7 +116,7 @@ def update_flights(mysql_conn, email_utente, opensky_endpoint, token):
             "Authorization": f"Bearer {token}"
         }
 
-        begin = get_begin_unix_time()
+        begin = get_begin_unix_time(days)
         end = get_end_unix_time()
 
         for icao in icao_list:
@@ -174,8 +174,8 @@ def update_all_flights():
 
     for u in users:
         email = u["email_utente"]
-        update_flights(mysql_conn, email, OPENSKY_DEPARTURE_ENDPOINT, token)
-        update_flights(mysql_conn, email, OPENSKY_ARRIVAL_ENDPOINT, token)
+        update_flights(mysql_conn, email, OPENSKY_DEPARTURE_ENDPOINT, token, 4)
+        update_flights(mysql_conn, email, OPENSKY_ARRIVAL_ENDPOINT, token, 1)
 
     mysql_conn.close()
     return jsonify({"message": "Voli aggiornati"}), 200
@@ -222,8 +222,8 @@ def add_interest():
                     return jsonify(f"[ERRORE]: {e}")
 
                 token = get_opensky_token()
-                update_flights(mysql_conn, email_utente, OPENSKY_DEPARTURE_ENDPOINT, token)#aggiorna le partenze
-                update_flights(mysql_conn, email_utente, OPENSKY_ARRIVAL_ENDPOINT, token)#aggiorna gli arrivi
+                update_flights(mysql_conn, email_utente, OPENSKY_DEPARTURE_ENDPOINT, token, 4)#aggiorna le partenze entro 4 giorni
+                update_flights(mysql_conn, email_utente, OPENSKY_ARRIVAL_ENDPOINT, token, 1)#aggiorna gli arrivi entro l'ultimo giorno
 
                 mysql_conn.close()
             else:
