@@ -205,7 +205,7 @@ def scheduler_job():
         with app.app_context():
             update_all_flights()
 
-        time.sleep(12 * 3600)   # ogni 12 orew
+        time.sleep(12 * 3600)   # ogni 12 ore
 
 @app.route("/")
 def home():
@@ -304,7 +304,7 @@ def get_media_voli(icao):
     else:
         return jsonify("Errore: impossibile connettersi al db"), 500
 
-class DataCollectorService():
+class DataCollectorService(user_service_pb2_grpc.DataServiceServicer):
     def DeleteUserInterests(self, request, context):
         email = request.email
 
