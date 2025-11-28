@@ -24,7 +24,7 @@ _sym_db = _symbol_database.Default()
 
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x12user_service.proto\"!\n\x10UserCheckRequest\x12\r\n\x05\x65mail\x18\x01 \x01(\t\"4\n\x11UserCheckResponse\x12\x0e\n\x06\x65xists\x18\x01 \x01(\x08\x12\x0f\n\x07message\x18\x02 \x01(\t2I\n\x0bUserService\x12:\n\x11\x43heckIfUserExists\x12\x11.UserCheckRequest\x1a\x12.UserCheckResponseb\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x12user_service.proto\"!\n\x10UserCheckRequest\x12\r\n\x05\x65mail\x18\x01 \x01(\t\"4\n\x11UserCheckResponse\x12\x0e\n\x06\x65xists\x18\x01 \x01(\x08\x12\x0f\n\x07message\x18\x02 \x01(\t\"?\n\x1b\x44\x65leteUserInterestsResponse\x12\x0f\n\x07\x64\x65leted\x18\x01 \x01(\x08\x12\x0f\n\x07message\x18\x02 \x01(\t2I\n\x0bUserService\x12:\n\x11\x43heckIfUserExists\x12\x11.UserCheckRequest\x1a\x12.UserCheckResponse2U\n\x0b\x44\x61taService\x12\x46\n\x13\x44\x65leteUserInterests\x12\x11.UserCheckRequest\x1a\x1c.DeleteUserInterestsResponseb\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
@@ -35,6 +35,10 @@ if not _descriptor._USE_C_DESCRIPTORS:
   _globals['_USERCHECKREQUEST']._serialized_end=55
   _globals['_USERCHECKRESPONSE']._serialized_start=57
   _globals['_USERCHECKRESPONSE']._serialized_end=109
-  _globals['_USERSERVICE']._serialized_start=111
-  _globals['_USERSERVICE']._serialized_end=184
+  _globals['_DELETEUSERINTERESTSRESPONSE']._serialized_start=111
+  _globals['_DELETEUSERINTERESTSRESPONSE']._serialized_end=174
+  _globals['_USERSERVICE']._serialized_start=176
+  _globals['_USERSERVICE']._serialized_end=249
+  _globals['_DATASERVICE']._serialized_start=251
+  _globals['_DATASERVICE']._serialized_end=336
 # @@protoc_insertion_point(module_scope)

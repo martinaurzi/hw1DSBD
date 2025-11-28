@@ -15,7 +15,10 @@ import user_service_pb2_grpc
 app = Flask(__name__)
 
 LISTEN_PORT = int(os.getenv("LISTEN_PORT", 5003))
-LISTEN_PORT_GRPC = int(os.getenv("LISTEN_PORT_GRPC"))
+LISTEN_PORT_GRPC = int(os.getenv("LISTEN_PORT_GRPC", 50051))
+
+GRPC_HOST = os.getenv("GRPC_HOST")
+GRPC_SEND_PORT = int(os.getenv("GRPC_SEND_PORT", 50052))
 
 # configurazione variabili di ambiente per connessione a MySQL
 MYSQL_HOST = os.getenv("MYSQL_HOST")
@@ -23,6 +26,8 @@ MYSQL_PORT = int(os.getenv("MYSQL_PORT"))
 MYSQL_USERNAME = os.getenv("MYSQL_USERNAME")
 MYSQL_PASSWORD = os.getenv("MYSQL_PASSWORD")
 MYSQL_DATABASE = os.getenv("MYSQL_DATABASE")
+
+DATA_COLLECTOR_ADDRESS = f"{GRPC_HOST}:{GRPC_SEND_PORT}"
 
 cache_message_ids = {}
 
@@ -88,7 +93,7 @@ def create_user():
         if mysql_conn:
             with mysql_conn.cursor() as cursor:
                 cursor.execute("SELECT * FROM users WHERE email=%s", (email,))
-                existing = cursor.fetchone() #recupera una sola riga, se esiste significa che l'email esiste gia
+                existing = cursor.fetchone()
 
                 if existing:
                     return jsonify({"error": "Utente già registrato"}), 400
@@ -102,7 +107,8 @@ def create_user():
                     )
 
                     mysql_conn.commit()
-                except Exception as e:
+
+                except pymysql.MySQLError as e:
                     mysql_conn.rollback()
                     return jsonify({"error": f"Errore DB: {e}"}), 500
 
@@ -116,19 +122,37 @@ def create_user():
 @app.route("/users/<email>", methods=["DELETE"])
 def delete_user(email):
     mysql_conn = get_connection()
+
     if mysql_conn:
         with mysql_conn.cursor() as cursor:
-            cursor.execute("SELECT * FROM users WHERE email=%s", (email,)) #(email,) è una tupla con un solo elemento e le query con cursor richiedono una lista o tupla
+            cursor.execute("SELECT * FROM users WHERE email=%s", (email,))
+
             user = cursor.fetchone()
+
             if not user:
                 return jsonify({"error": "Utente non trovato"}), 404
+
             try:
                 cursor.execute("DELETE FROM users WHERE email=%s", (email,))
+
                 mysql_conn.commit()
-            except Exception as e:
+
+                # Comunico tramite il canale gRPC col data-collector per eliminare le righe corrispondenti all'utente eliminato
+                # dalla tabella user-airports
+                with grpc.insecure_channel(DATA_COLLECTOR_ADDRESS) as channel:
+                    stub = user_service_pb2_grpc.DataServiceStub(channel)
+
+                    response = stub.DeleteUserInterests(user_service_pb2.UserCheckRequest(email=email))
+
+                    if response.deleted:
+                        return jsonify({"message": f"Interessi dell'utente {email} cancellati con successo"}), 200
+
+            except pymysql.MySQLError as e:
                 mysql_conn.rollback()
-                return jsonify({"error": f"Errore DB: {e}"}), 500
+                return jsonify({"error": f"Impossibile eliminare l'utente {email}: {e}"}), 500
+
         mysql_conn.close()
+
         return jsonify({"message": f"Utente {email} cancellato con successo"}), 200
     else:
         return jsonify({"error": "MySQL non connesso"}), 503

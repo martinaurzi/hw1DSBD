@@ -17,3 +17,11 @@ class UserCheckResponse(_message.Message):
     exists: bool
     message: str
     def __init__(self, exists: bool = ..., message: _Optional[str] = ...) -> None: ...
+
+class DeleteUserInterestsResponse(_message.Message):
+    __slots__ = ("deleted", "message")
+    DELETED_FIELD_NUMBER: _ClassVar[int]
+    MESSAGE_FIELD_NUMBER: _ClassVar[int]
+    deleted: bool
+    message: str
+    def __init__(self, deleted: bool = ..., message: _Optional[str] = ...) -> None: ...

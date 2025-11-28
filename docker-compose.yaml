@@ -55,6 +55,8 @@ services:
       - MYSQL_DATABASE=userDb
       - LISTEN_PORT=5003 # REST API
       - LISTEN_PORT_GRPC=50051
+      - GRPC_HOST=data-collector
+      - GRPC_SEND_PORT=50052
     depends_on:
       user-db:
         condition: service_healthy
@@ -68,7 +70,7 @@ services:
       - net
 
   data-collector:
-    build: #./data-collector
+    build:
       context: .
       dockerfile: ./data-collector/Dockerfile
       args:
@@ -83,8 +85,9 @@ services:
       - MYSQL_PASSWORD=rusurz
       - MYSQL_DATABASE=dataDb
       - LISTEN_PORT=5002 # REST API
+      - LISTEN_PORT_GRPC=50052
       - GRPC_HOST=user-manager
-      - GRPC_PORT=50051
+      - GRPC_SEND_PORT=50051
       - OPENSKY_CLIENT_ID=${OPENSKY_CLIENT_ID}
       - OPENSKY_CLIENT_SECRET=${OPENSKY_CLIENT_SECRET}
     depends_on:
