@@ -148,6 +148,8 @@ def update_flights(mysql_conn, email_utente, opensky_endpoint, token, days):
                         last_seen = flights.get("lastSeen")
                         aeroporto_arrivo = flights.get("estArrivalAirport")
 
+                        logging.info(f"Opensky {opensky_endpoint} risposta: {icao_aereo}, {first_seen}, {aeroporto_partenza}, {last_seen}, {aeroporto_arrivo}")
+
                         with mysql_conn.cursor() as cursor:
                             try:
                                 sql_flights = ("INSERT IGNORE INTO flight (icao_aereo, first_seen, aeroporto_partenza, "
@@ -171,25 +173,27 @@ def update_flights(mysql_conn, email_utente, opensky_endpoint, token, days):
 
 def update_all_flights():
     mysql_conn = get_connection()
-    if not mysql_conn:
-        logging.error("Scheduler: impossibile connettersi al db")
-        #return jsonify({"errore": "impossibile connettersi al db"}), 500
 
-    token = get_opensky_token()
-    if token:
-        with mysql_conn.cursor() as cursor:
-            cursor.execute("SELECT DISTINCT email_utente FROM user_airports")
-            users = cursor.fetchall()
+    if mysql_conn:
+        token = get_opensky_token()
 
-        for u in users:
-            email = u["email_utente"]
-            update_flights(mysql_conn, email, OPENSKY_DEPARTURE_ENDPOINT, token, 4)
-            update_flights(mysql_conn, email, OPENSKY_ARRIVAL_ENDPOINT, token, 1)
+        if token:
+            with mysql_conn.cursor() as cursor:
+                cursor.execute("SELECT DISTINCT email_utente FROM user_airports")
+                users = cursor.fetchall()
+
+            for u in users:
+                email = u["email_utente"]
+                update_flights(mysql_conn, email, OPENSKY_DEPARTURE_ENDPOINT, token, 1)
+                update_flights(mysql_conn, email, OPENSKY_ARRIVAL_ENDPOINT, token, 1)
+        else:
+            logging.error("Scheduler: impossibile connettersi al db")
+            #return jsonify({"errore": "token OPENSKY non valido"}), 500
+
+        mysql_conn.close()
     else:
         logging.error("Scheduler: impossibile connettersi al db")
-        #return jsonify({"errore": "token OPENSKY non valido"}), 500
-
-    mysql_conn.close()
+        #return jsonify({"errore": "impossibile connettersi al db"}), 500
 
     logging.error("Scheduler: Voli aggiornati")
     #return jsonify({"message": "Voli aggiornati"}), 200
@@ -239,7 +243,7 @@ def add_interest():
                     return jsonify(f"[ERRORE]: {e}")
 
                 token = get_opensky_token()
-                update_flights(mysql_conn, email_utente, OPENSKY_DEPARTURE_ENDPOINT, token, 4)#aggiorna le partenze entro 4 giorni
+                update_flights(mysql_conn, email_utente, OPENSKY_DEPARTURE_ENDPOINT, token, 1)#aggiorna le partenze entro 1 giorno
                 update_flights(mysql_conn, email_utente, OPENSKY_ARRIVAL_ENDPOINT, token, 1)#aggiorna gli arrivi entro l'ultimo giorno
 
                 mysql_conn.close()

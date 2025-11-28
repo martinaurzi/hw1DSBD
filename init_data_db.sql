@@ -11,11 +11,5 @@ CREATE TABLE IF NOT EXISTS flight(
     aeroporto_partenza VARCHAR(4) NOT NULL,
     last_seen INT,
     aeroporto_arrivo VARCHAR(4) NOT NULL,
-    callsign VARCHAR(10) NULL,
-    estDepartureAirportHorizDistance INT NULL,
-    estDepartureAirportVertDistance INT NULL,
-    estArrivalAirportHorizDistance INT NULL,
-    estArrivalAirportVertDistance INT NULL,
-    departureAirportCandidatesCount INT NULL,
-    arrivalAirportCandidatesCount INT NULL
+    CONSTRAINT unique_flight UNIQUE (icao_aereo, first_seen, aeroporto_partenza)
 );
