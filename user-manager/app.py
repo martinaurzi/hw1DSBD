@@ -1,9 +1,10 @@
-import time
+import logging
 
 from flask import Flask, jsonify, request
 import os
 import pymysql
 import bcrypt
+import time
 
 import grpc
 from concurrent import futures
@@ -20,7 +21,6 @@ LISTEN_PORT_GRPC = int(os.getenv("LISTEN_PORT_GRPC", 50051))
 GRPC_HOST = os.getenv("GRPC_HOST")
 GRPC_SEND_PORT = int(os.getenv("GRPC_SEND_PORT", 50052))
 
-# configurazione variabili di ambiente per connessione a MySQL
 MYSQL_HOST = os.getenv("MYSQL_HOST")
 MYSQL_PORT = int(os.getenv("MYSQL_PORT"))
 MYSQL_USERNAME = os.getenv("MYSQL_USERNAME")
@@ -31,6 +31,7 @@ DATA_COLLECTOR_ADDRESS = f"{GRPC_HOST}:{GRPC_SEND_PORT}"
 
 cache_message_ids = {}
 
+# Funzione per la connessione al database MySQL
 def get_connection():
     try:
         mysql_conn = pymysql.connect(
@@ -41,11 +42,15 @@ def get_connection():
             database=MYSQL_DATABASE,
             cursorclass=pymysql.cursors.DictCursor
         )
-        #eseguo una query di ping
+
+        # Eseguo una query di ping
         mysql_conn.ping(reconnect=True)
-        print(f"Connessione a MySQL stabilita su {MYSQL_HOST}:{MYSQL_PORT}, DB={MYSQL_DATABASE}")
+
+        print(f"Connessione MySQL stabilita su {MYSQL_HOST}:{MYSQL_PORT}, DB={MYSQL_DATABASE}")
+
         return mysql_conn
-    except Exception as e:
+
+    except pymysql.MySQLError as e:
         print(f"ERRORE: Impossibile connettersi a MySQL. Dettagli: {e}")
         return None
 
@@ -92,6 +97,7 @@ def create_user():
         mysql_conn = get_connection()
         if mysql_conn:
             with mysql_conn.cursor() as cursor:
+                # Verfico se l'utente esiste
                 cursor.execute("SELECT * FROM users WHERE email=%s", (email,))
                 existing = cursor.fetchone()
 
@@ -101,6 +107,7 @@ def create_user():
                 hashed_pw = bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt())
 
                 try:
+                    # Inserisco l'utente nella tabella users
                     cursor.execute(
                         "INSERT INTO users (email, nome, cognome, password_hash) VALUES (%s, %s, %s, %s)",
                         (email, nome, cognome, hashed_pw)
@@ -114,8 +121,7 @@ def create_user():
 
             mysql_conn.close()
 
-            return jsonify({"message": "Utente registrato con successo", "email": email}), 201
-
+            return jsonify({"message": f"Utente {email} registrato con successo"}), 200
         else:
             return jsonify({"error": "MySQl non connesso"}), 503
 
@@ -137,8 +143,12 @@ def delete_user(email):
 
                 mysql_conn.commit()
 
-                # Comunico tramite il canale gRPC col data-collector per eliminare le righe corrispondenti all'utente eliminato
-                # dalla tabella user-airports
+                logging.info(f"Utente {email} cancellato con successo")
+
+                mysql_conn.close()
+
+                # Comunico tramite il canale gRPC col data-collector per eliminare le righe corrispondenti
+                # all'utente eliminato dalla tabella user-airports
                 with grpc.insecure_channel(DATA_COLLECTOR_ADDRESS) as channel:
                     stub = user_service_pb2_grpc.DataServiceStub(channel)
 
@@ -146,27 +156,31 @@ def delete_user(email):
 
                     if response.deleted:
                         return jsonify({"message": f"Interessi dell'utente {email} cancellati con successo"}), 200
+                    else:
+                        return jsonify({"error": f"Errore nell'eliminazinoe degli nteressi dell'utente {email}"}), 500
 
             except pymysql.MySQLError as e:
                 mysql_conn.rollback()
+                mysql_conn.close()
                 return jsonify({"error": f"Impossibile eliminare l'utente {email}: {e}"}), 500
-
-        mysql_conn.close()
-
-        return jsonify({"message": f"Utente {email} cancellato con successo"}), 200
     else:
         return jsonify({"error": "MySQL non connesso"}), 503
 
 class UserManagerService(user_service_pb2_grpc.UserServiceServicer):
     def CheckIfUserExists(self, request, context):
         email = request.email
+
         mysql_conn = get_connection()
+
         if mysql_conn:
             with mysql_conn.cursor() as cursor:
                 cursor.execute("SELECT * FROM users WHERE email=%s", (email,))
                 user = cursor.fetchone()
-                exists = user is not None  # booleano True/False
+
+                exists = user is not None
+
             mysql_conn.close()
+
             return user_service_pb2.UserCheckResponse(
                 exists=exists,
                 message="Utente trovato" if exists else "Utente non trovato"
@@ -174,19 +188,22 @@ class UserManagerService(user_service_pb2_grpc.UserServiceServicer):
         else:
             context.set_code(grpc.StatusCode.UNAVAILABLE)
             context.set_details("MySQL non connesso")
+
             return user_service_pb2.UserCheckResponse(
                 exists=False,
                 message="Errore: MySQL non connesso"
             )
 
 def serve():
-    server = grpc.server(futures.ThreadPoolExecutor(max_workers=10)) #creo server grpc con thread pool di 10 worker threads
+    # Creo un server grpc con thread pool di 10 worker threads
+    server = grpc.server(futures.ThreadPoolExecutor(max_workers=10))
 
     user_service_pb2_grpc.add_UserServiceServicer_to_server(UserManagerService(), server)
 
-    server.add_insecure_port(f'[::]:{LISTEN_PORT_GRPC}') #leghiamo server alla porta
+    server.add_insecure_port(f'[::]:{LISTEN_PORT_GRPC}') # Lego il server alla porta
 
     server.start()
+
     print(f"UserService è pronto ed in ascolto sulla porta {LISTEN_PORT_GRPC}")
 
     server.wait_for_termination()
@@ -194,6 +211,7 @@ def serve():
 if __name__ == "__main__":
     # Avvia gRPC in un thread separato
     threading.Thread(target=serve, daemon=True).start()
+
     # Avvia Flask
     app.run(host="0.0.0.0", port=LISTEN_PORT, debug=True)
 

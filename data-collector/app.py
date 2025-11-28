@@ -1,6 +1,3 @@
-import time
-from concurrent import futures
-
 from flask import Flask, jsonify, request
 import os
 import pymysql.cursors
@@ -8,8 +5,11 @@ import requests
 import grpc
 import user_service_pb2
 import user_service_pb2_grpc
+
+import time
 from datetime import datetime, timezone
 
+from concurrent import futures
 import threading
 
 import logging
@@ -44,6 +44,7 @@ TIMEOUT_SECONDS = 10
 
 USER_MANAGER_ADDRESS = f"{GRPC_HOST}:{GRPC_SEND_PORT}"
 
+# Funzione per la connessione al database MySQL
 def get_connection():
     try:
         mysql_conn = pymysql.connect(host=MYSQL_HOST,
@@ -86,10 +87,10 @@ def get_opensky_token():
         print(f"[ERRORE]: Non è stato possibile recuperare il token: {e}")
         return None
 
+# Recupera gli aeroporti di interesse dell'utente tramite la sua email
 def get_user_airports(mysql_conn, email: str) -> list[str]:
     try:
         with mysql_conn.cursor() as cursor:
-            # Recupero gli aeroporti di interesse dell'utente
             sql_get_aeroporti = "SELECT icao_aeroporto FROM user_airports WHERE email_utente = %s"
             cursor.execute(sql_get_aeroporti, (email, ))
 
@@ -105,6 +106,7 @@ def get_user_airports(mysql_conn, email: str) -> list[str]:
     except pymysql.MySQLError as e:
         return []
 
+# Calcola il parametro begin necessario per l'API di OpenSky
 def get_begin_unix_time(days) -> int:
     current_time_utc = datetime.now(timezone.utc)
 
@@ -114,9 +116,11 @@ def get_begin_unix_time(days) -> int:
 
     return current_time_timestamp - days_in_seconds
 
+# Calcola il parametro begin necessario per l'API di OpenSky. Restituisce l'istante attuale in unix time
 def get_end_unix_time() -> int:
     return int(time.time())
 
+# Questa funzione effettua la chiamata all'API di OpenSky
 def update_flights(mysql_conn, email_utente, opensky_endpoint, token, days):
     if token:
         icao_list = get_user_airports(mysql_conn, email_utente)
@@ -128,6 +132,7 @@ def update_flights(mysql_conn, email_utente, opensky_endpoint, token, days):
         begin = get_begin_unix_time(days)
         end = get_end_unix_time()
 
+        # Per ogni aeroporto di interesse dell'utente prendiamo i voli
         for icao in icao_list:
             params = {
                 "airport": icao,
@@ -141,7 +146,6 @@ def update_flights(mysql_conn, email_utente, opensky_endpoint, token, days):
 
                 data_flights = response.json()
 
-                # Aggiorno i voli da ogni aeroporto
                 if data_flights:
                     for flights in data_flights:
                         icao_aereo = flights.get("icao24")
@@ -152,10 +156,12 @@ def update_flights(mysql_conn, email_utente, opensky_endpoint, token, days):
 
                         #logging.info(f"Opensky {opensky_endpoint} risposta: {icao_aereo}, {first_seen}, {aeroporto_partenza}, {last_seen}, {aeroporto_arrivo}")
 
+                        # Inseriamo il volo corrente nella tabella flight
                         with mysql_conn.cursor() as cursor:
                             try:
                                 sql_flights = ("INSERT IGNORE INTO flight (icao_aereo, first_seen, aeroporto_partenza, "
                                                 "last_seen, aeroporto_arrivo) VALUES (%s, %s, %s, %s, %s)")
+
                                 cursor.execute(sql_flights, (icao_aereo, first_seen, aeroporto_partenza, last_seen, aeroporto_arrivo))
 
                                 mysql_conn.commit()
@@ -163,16 +169,13 @@ def update_flights(mysql_conn, email_utente, opensky_endpoint, token, days):
                             except pymysql.MySQLError as e:
                                 mysql_conn.rollback()
                                 logging.error(f"Errore MySQL {e}")
-                                #return jsonify({"errore": f"MySQL: {e}"}), 500
 
             except requests.exceptions.RequestException as e:
                 logging.error(f"Non è stato possibile recuperare i voli: {e}")
-                #return jsonify({"errore": f"Non è stato possibile recuperare i voli: {e}"}), 502
-
     else:
         logging.error("Token OPENSKY non valido")
-        #return jsonify({"errore": "token OPENSKY non valido"}), 401
 
+# Aggiorna i voli per tutti gli utenti
 def update_all_flights():
     mysql_conn = get_connection()
 
@@ -186,26 +189,25 @@ def update_all_flights():
 
             for u in users:
                 email = u["email_utente"]
+
                 update_flights(mysql_conn, email, OPENSKY_DEPARTURE_ENDPOINT, token, 1)
                 update_flights(mysql_conn, email, OPENSKY_ARRIVAL_ENDPOINT, token, 1)
         else:
             logging.error("Scheduler: token OPENSKY non valido")
-            #return jsonify({"errore": "token OPENSKY non valido"}), 500
 
         mysql_conn.close()
     else:
         logging.error("Scheduler: impossibile connettersi al db")
-        #return jsonify({"errore": "impossibile connettersi al db"}), 500
 
     logging.info("Scheduler: Voli aggiornati")
-    #return jsonify({"message": "Voli aggiornati"}), 200
 
+# Questa funzione permette di aggiornare in modo ciclico (ogni 12 ore) i voli relativi agli aeroporti a cui gli utenti sono interessati
 def scheduler_job():
     while True:
         with app.app_context():
             update_all_flights()
 
-        time.sleep(12 * 3600)   # ogni 12 ore
+        time.sleep(12 * 3600)
 
 @app.route("/")
 def home():
@@ -352,9 +354,10 @@ def serve():
     server.wait_for_termination()
 
 if __name__ == "__main__":
+    # Thread per aggiornare i voli in modo ciclico
     threading.Thread(target=scheduler_job, daemon=True).start()
 
-    # Avvia gRPC in un thread separato
+    # Thread per gRPC
     threading.Thread(target=serve, daemon=True).start()
 
     app.run(host="0.0.0.0", port=LISTEN_PORT, debug=True)
