@@ -205,7 +205,7 @@ def scheduler_job():
         with app.app_context():
             update_all_flights()
 
-        time.sleep(12 * 3600)   # ogni 12 ore
+        time.sleep(12 * 3600)   # ogni 12 orew
 
 @app.route("/")
 def home():
@@ -261,15 +261,29 @@ def add_interest():
 @app.route("/airport/<icao>/last", methods=["GET"])
 def get_last_flight(icao):
     mysql_conn = get_connection()
-    if mysql_conn:
+    if not mysql_conn:
+        return jsonify({"error": "Errore: impossibile connettersi al db"}), 500
+
+    try:
         with mysql_conn.cursor() as cursor:
-            sql_last_flight = "SELECT * FROM flight WHERE aeroporto_partenza = %s OR aeroporto_arrivo = %s ORDER BY last_seen DESC LIMIT 1"
-            cursor.execute(sql_last_flight, (icao, icao))
-            volo = cursor.fetchone()
+            sql_last_departure = "SELECT * FROM flight WHERE aeroporto_partenza = %s ORDER BY last_seen DESC LIMIT 1"
+            cursor.execute(sql_last_departure, (icao,))
+            last_departure = cursor.fetchone()
+
+            sql_last_arrival = "SELECT * FROM flight WHERE aeroporto_arrivo = %s ORDER BY last_seen DESC LIMIT 1"
+            cursor.execute(sql_last_arrival, (icao,))
+            last_arrival = cursor.fetchone()
+    finally:
         mysql_conn.close()
-        return jsonify(volo), 200 if volo else (jsonify("Nessun volo trovato"), 404)
-    else:
-        return jsonify("Errore: impossibile connettersi al db"), 500
+
+    if not last_departure and not last_arrival:
+        return jsonify({"error": "Nessun volo trovato"}), 404
+
+    return jsonify({
+        "last_departure": last_departure,
+        "last_arrival": last_arrival
+    }), 200
+
 
 @app.route("/airport/<icao>/media", methods=["GET"])
 def get_media_voli(icao):
