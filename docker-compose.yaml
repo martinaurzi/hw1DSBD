@@ -17,7 +17,7 @@ services:
       timeout: 10s
       retries: 5
     networks:
-        - net
+      - user-net
 
   data-db:
     image: mysql:8.0
@@ -37,7 +37,7 @@ services:
     env_file:
       - .env
     networks:
-        - net
+        - data-net
 
   user-manager:
     build:
@@ -70,7 +70,8 @@ services:
     env_file:
       - .env
     networks:
-      - net
+      - user-net
+      - app-net
 
   data-collector:
     build:
@@ -102,12 +103,14 @@ services:
     env_file:
       - .env
     networks:
-      - net
+      - data-net
+      - app-net
 
 volumes:
   user_db_data:
   data_db_data:
 
 networks:
-  net:
-    driver: bridge
+  app-net:
+  data-net:
+  user-net:

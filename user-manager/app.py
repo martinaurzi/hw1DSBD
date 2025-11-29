@@ -54,6 +54,12 @@ def get_connection():
         print(f"ERRORE: Impossibile connettersi a MySQL. Dettagli: {e}")
         return None
 
+# Svuota la cache ogni 10 minuti
+def clear_cache():
+    cache_message_ids.clear()
+
+    threading.Timer(600, clear_cache).start()
+
 @app.route("/")
 def home():
     return jsonify(message="Hello"), 200
@@ -68,22 +74,9 @@ def create_user():
     cognome = data.get("cognome")
     password = data.get("password")
 
-    print(cache_message_ids)
-
     # Verificare se message_id si trova nella cache
     if message_id and message_id in cache_message_ids:
-        return jsonify({"error": "Utente già registrato"}), 400
-
-        #cached_data = cache_message_ids[message_id]
-
-        #cached_email = cached_data.get("email")
-
-        #if cached_email == email:
-            # Message ID e email trovati
-            #return jsonify({"error": "Utente già registrato"}), 400
-
-        # Message ID presente ma email diversa
-        # ...
+        return jsonify({"error": "Utente già registrato [At-most-once]"}), 400
     else:
         if not email or not password:
             return jsonify({"error": "Email e password obbligatorie"}), 400
@@ -102,7 +95,7 @@ def create_user():
                 existing = cursor.fetchone()
 
                 if existing:
-                    return jsonify({"error": "Utente già registrato"}), 400
+                    return jsonify({"error": f"Email {email} già in uso"}), 400
 
                 hashed_pw = bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt())
 
@@ -211,6 +204,9 @@ def serve():
 if __name__ == "__main__":
     # Avvia gRPC in un thread separato
     threading.Thread(target=serve, daemon=True).start()
+
+    # Thread per pulire la cache
+    threading.Thread(target=clear_cache, daemon=True).start()
 
     # Avvia Flask
     app.run(host="0.0.0.0", port=LISTEN_PORT, debug=True)
