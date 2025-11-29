@@ -13,6 +13,9 @@ import threading
 import user_service_pb2
 import user_service_pb2_grpc
 
+logging.basicConfig(level=logging.INFO,
+                    format="%(asctime)s [%(levelname)s] %(message)s")
+
 app = Flask(__name__)
 
 LISTEN_PORT = int(os.getenv("LISTEN_PORT", 5003))
@@ -43,15 +46,13 @@ def get_connection():
             cursorclass=pymysql.cursors.DictCursor
         )
 
-        # Eseguo una query di ping
         mysql_conn.ping(reconnect=True)
-
-        print(f"Connessione MySQL stabilita su {MYSQL_HOST}:{MYSQL_PORT}, DB={MYSQL_DATABASE}")
+        logging.info(f"Connessione MySQL stabilita su {MYSQL_HOST}:{MYSQL_PORT}, DB={MYSQL_DATABASE}")
 
         return mysql_conn
 
     except pymysql.MySQLError as e:
-        print(f"ERRORE: Impossibile connettersi a MySQL. Dettagli: {e}")
+        logging.error(f"Errore connessione MySQL: {e}")
         return None
 
 # Svuota la cache ogni 10 minuti
@@ -76,7 +77,8 @@ def create_user():
 
     # Verificare se message_id si trova nella cache
     if message_id and message_id in cache_message_ids:
-        return jsonify({"error": "Utente già registrato [At-most-once]"}), 400
+        return jsonify({"error": "Richiesta già elaborata [At-most-once]"}), 409
+
     else:
         if not email or not password:
             return jsonify({"error": "Email e password obbligatorie"}), 400
@@ -91,32 +93,32 @@ def create_user():
         if mysql_conn:
             with mysql_conn.cursor() as cursor:
                 # Verfico se l'utente esiste
-                cursor.execute("SELECT * FROM users WHERE email=%s", (email,))
+                sql_email = "SELECT * FROM users WHERE email=%s"
+                cursor.execute(sql_email, (email,))
                 existing = cursor.fetchone()
 
                 if existing:
-                    return jsonify({"error": f"Email {email} già in uso"}), 400
+                    return jsonify({"error": f"Email {email} già in uso"}), 409
 
                 hashed_pw = bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt())
 
                 try:
                     # Inserisco l'utente nella tabella users
-                    cursor.execute(
-                        "INSERT INTO users (email, nome, cognome, password_hash) VALUES (%s, %s, %s, %s)",
-                        (email, nome, cognome, hashed_pw)
-                    )
+                    sql_insert_user = "INSERT INTO users (email, nome, cognome, password_hash) VALUES (%s, %s, %s, %s)"
+                    cursor.execute(sql_insert_user,(email, nome, cognome, hashed_pw))
 
                     mysql_conn.commit()
+                    return jsonify({"message": f"Utente {email} registrato con successo"}), 201
 
                 except pymysql.MySQLError as e:
                     mysql_conn.rollback()
-                    return jsonify({"error": f"Errore DB: {e}"}), 500
+                    logging.error(f"Errore DB durante create_user: {e}")
+                    return jsonify({"error": "Errore interno del database"}), 500
 
-            mysql_conn.close()
-
-            return jsonify({"message": f"Utente {email} registrato con successo"}), 200
+                finally:
+                    mysql_conn.close()
         else:
-            return jsonify({"error": "MySQl non connesso"}), 503
+            return jsonify({"error": "Database MySQl non disponibile"}), 503
 
 @app.route("/users/<email>", methods=["DELETE"])
 def delete_user(email):
@@ -142,22 +144,36 @@ def delete_user(email):
 
                 # Comunico tramite il canale gRPC col data-collector per eliminare le righe corrispondenti
                 # all'utente eliminato dalla tabella user-airports
-                with grpc.insecure_channel(DATA_COLLECTOR_ADDRESS) as channel:
-                    stub = user_service_pb2_grpc.DataServiceStub(channel)
+                try:
+                    with grpc.insecure_channel(DATA_COLLECTOR_ADDRESS) as channel:
+                        stub = user_service_pb2_grpc.DataServiceStub(channel)
 
-                    response = stub.DeleteUserInterests(user_service_pb2.UserCheckRequest(email=email))
+                        response = stub.DeleteUserInterests(user_service_pb2.UserCheckRequest(email=email))
 
-                    if response.deleted:
-                        return jsonify({"message": f"Interessi dell'utente {email} cancellati con successo"}), 200
-                    else:
-                        return jsonify({"error": f"Errore nell'eliminazinoe degli nteressi dell'utente {email}"}), 500
+                        if response.deleted:
+                            return jsonify({"message": f"Interessi dell'utente {email} cancellati con successo"}), 200
+
+                        else:
+                            return jsonify({"error": f"Errore nella cancellazione degli interessi dell'utente {email}"}), 500
+
+                except grpc.RpcError as e:
+                    logging.error(f"Errore gRPC durante delete_user: {e}")
+                    return jsonify({"error": "Errore di comunicazione con il data-collector"}), 502
 
             except pymysql.MySQLError as e:
-                mysql_conn.rollback()
-                mysql_conn.close()
-                return jsonify({"error": f"Impossibile eliminare l'utente {email}: {e}"}), 500
+                    mysql_conn.rollback()
+                    logging.error(f"Errore DB durante delete_user: {e}")
+                    return jsonify({"error": "Errore interno del database"}), 500
+
+            finally:
+                # garantisce la chiusura anche se non è già stata chiusa
+                try:
+                    mysql_conn.close()
+                except Exception:
+                    pass
+
     else:
-        return jsonify({"error": "MySQL non connesso"}), 503
+        return jsonify({"error": "Database MySQl non disponibile"}), 503
 
 class UserManagerService(user_service_pb2_grpc.UserServiceServicer):
     def CheckIfUserExists(self, request, context):
@@ -197,7 +213,7 @@ def serve():
 
     server.start()
 
-    print(f"UserService è pronto ed in ascolto sulla porta {LISTEN_PORT_GRPC}")
+    logging.info(f"UserService è pronto ed in ascolto sulla porta {LISTEN_PORT_GRPC}")
 
     server.wait_for_termination()
 
