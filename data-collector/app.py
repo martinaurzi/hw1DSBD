@@ -54,19 +54,22 @@ def get_connection():
                                      charset='utf8mb4',
                                      cursorclass=pymysql.cursors.DictCursor)
         return mysql_conn
-
     except pymysql.MySQLError as e:
-        print(f"[ERRORE] Impossibile connettersi a MySQL: {e}")
+        logging.error(f"Impossibile connettersi a MySQL: {e}")
         return None
 
 # Verifica se l'utente esiste comunicando tramite il canale gRPC con user-manager
 def check_if_exists(email: str) -> bool:
-    with grpc.insecure_channel(USER_MANAGER_ADDRESS) as channel:
-        stub = user_service_pb2_grpc.UserServiceStub(channel)
+    try:
+        with grpc.insecure_channel(USER_MANAGER_ADDRESS) as channel:
+            stub = user_service_pb2_grpc.UserServiceStub(channel)
 
-        response = stub.CheckIfUserExists(user_service_pb2.UserCheckRequest(email=email))
+            response = stub.CheckIfUserExists(user_service_pb2.UserCheckRequest(email=email))
 
-        return response.exists
+            return response.exists
+    except grpc.RpcError as e:
+        logging.error("Errore gRPC")
+        return False
 
 def get_opensky_token():
     payload = {
@@ -83,8 +86,11 @@ def get_opensky_token():
 
         return data.get("access_token")
 
+    except requests.exceptions.HTTPError as errh:
+        logging.error(f"Errore HTTP. Non è stato possibile recuperare il token: {errh.args[0]}")
+        return None
     except requests.exceptions.RequestException as e:
-        print(f"[ERRORE]: Non è stato possibile recuperare il token: {e}")
+        logging.error(f"Errore nella richiesta. Non è stato possibile recuperare il token: {e}")
         return None
 
 # Recupera gli aeroporti di interesse dell'utente tramite la sua email
@@ -102,8 +108,8 @@ def get_user_airports(mysql_conn, email: str) -> list[str]:
                 icao_list.append(icao)
 
             return icao_list
-
     except pymysql.MySQLError as e:
+        logging.error(f"Non è stato possibile recuperare gli interessi dell'utente: {e}")
         return []
 
 # Calcola il parametro begin necessario per l'API di OpenSky
@@ -116,13 +122,14 @@ def get_begin_unix_time(days) -> int:
 
     return current_time_timestamp - days_in_seconds
 
-# Calcola il parametro begin necessario per l'API di OpenSky. Restituisce l'istante attuale in unix time
-def get_end_unix_time() -> int:
+# Restituisce l'istante attuale in unix time
+def get_current_unix_time() -> int:
     return int(time.time())
 
 # Questa funzione effettua la chiamata all'API di OpenSky
 def update_flights(mysql_conn, email_utente, opensky_endpoint, token, days):
     if token:
+        # Recupero gli interessi dell'utente
         icao_list = get_user_airports(mysql_conn, email_utente)
 
         headers = {
@@ -130,9 +137,9 @@ def update_flights(mysql_conn, email_utente, opensky_endpoint, token, days):
         }
 
         begin = get_begin_unix_time(days)
-        end = get_end_unix_time()
+        end = get_current_unix_time()
 
-        # Per ogni aeroporto di interesse dell'utente prendiamo i voli
+        # Per ogni aeroporto di interesse dell'utente prendo i voli
         for icao in icao_list:
             params = {
                 "airport": icao,
@@ -154,9 +161,7 @@ def update_flights(mysql_conn, email_utente, opensky_endpoint, token, days):
                         last_seen = flights.get("lastSeen")
                         aeroporto_arrivo = flights.get("estArrivalAirport")
 
-                        #logging.info(f"Opensky {opensky_endpoint} risposta: {icao_aereo}, {first_seen}, {aeroporto_partenza}, {last_seen}, {aeroporto_arrivo}")
-
-                        # Inseriamo il volo corrente nella tabella flight
+                        # Inserisco il volo corrente nella tabella flight
                         with mysql_conn.cursor() as cursor:
                             try:
                                 sql_flights = ("INSERT IGNORE INTO flight (icao_aereo, first_seen, aeroporto_partenza, "
@@ -165,15 +170,18 @@ def update_flights(mysql_conn, email_utente, opensky_endpoint, token, days):
                                 cursor.execute(sql_flights, (icao_aereo, first_seen, aeroporto_partenza, last_seen, aeroporto_arrivo))
 
                                 mysql_conn.commit()
-
                             except pymysql.MySQLError as e:
                                 mysql_conn.rollback()
-                                logging.error(f"Errore MySQL {e}")
+                                logging.error(f"Errore nell'inserimento del volo corrente nella tabella flight {e}")
+                            finally:
+                                mysql_conn.close()
 
+            except requests.exceptions.HTTPError as errh:
+                    logging.error(f"Errore HTTP. Non è stato possibile recuperare i voli da OpenSky: {errh.args[0]}")
             except requests.exceptions.RequestException as e:
-                logging.error(f"Non è stato possibile recuperare i voli: {e}")
+                logging.error(f"Errore nella richiesta. Non è stato possibile recuperare i voli da OpenSky: {e}")
     else:
-        logging.error("Token OPENSKY non valido")
+        logging.error("Token OpenSky non valido")
 
 # Aggiorna i voli per tutti gli utenti
 def update_all_flights():
@@ -184,8 +192,11 @@ def update_all_flights():
 
         if token:
             with mysql_conn.cursor() as cursor:
-                cursor.execute("SELECT DISTINCT email_utente FROM user_airports")
-                users = cursor.fetchall()
+                try:
+                    cursor.execute("SELECT DISTINCT email_utente FROM user_airports")
+                    users = cursor.fetchall()
+                except pymysql.MySQLError as e:
+                    logging.error("Scheduler: Impossibile recuperare gli utenti")
 
             for u in users:
                 email = u["email_utente"]
@@ -193,7 +204,7 @@ def update_all_flights():
                 update_flights(mysql_conn, email, OPENSKY_DEPARTURE_ENDPOINT, token, 1)
                 update_flights(mysql_conn, email, OPENSKY_ARRIVAL_ENDPOINT, token, 1)
         else:
-            logging.error("Scheduler: token OPENSKY non valido")
+            logging.error("Scheduler: token OpenSky non valido")
 
         mysql_conn.close()
     else:
@@ -211,70 +222,67 @@ def scheduler_job():
 
 @app.route("/")
 def home():
-    return jsonify("Hello, Data Collector"), 200
+    return jsonify({"message": "Hello Data Collector!"}), 200
 
 @app.route("/user/interests", methods=["POST"])
 def add_interest():
     data = request.json
 
-    email_utente = data["email_utente"]
-    aeroporti_icao = data['aeroporti_icao']
+    email_utente = data.get("email_utente")
+    aeroporti_icao = data.get("aeroporti_icao")
 
-    try:
-        if check_if_exists(email_utente):
-            # Utente esiste
-            mysql_conn = get_connection()
+    if check_if_exists(email_utente):
+        # Utente esiste
+        mysql_conn = get_connection()
 
-            # Inserisco gli aeroporti indicati dall'utente nella tabella airport
-            if mysql_conn:
-                try:
-                    with mysql_conn.cursor() as cursor:
-                        for icao in aeroporti_icao:
+        # Inserisco gli aeroporti indicati dall'utente nella tabella airport
+        if mysql_conn:
+            try:
+                with mysql_conn.cursor() as cursor:
+                    for icao in aeroporti_icao:
 
-                            sql_interest = "INSERT IGNORE INTO user_airports (email_utente, icao_aeroporto) VALUES (%s, %s)"
-                            cursor.execute(sql_interest, (email_utente, icao))
+                        sql_interest = "INSERT IGNORE INTO user_airports (email_utente, icao_aeroporto) VALUES (%s, %s)"
+                        cursor.execute(sql_interest, (email_utente, icao))
 
-                    mysql_conn.commit()
+                mysql_conn.commit()
+            except pymysql.MySQLError as e:
+                mysql_conn.rollback()
+                return jsonify({"error": f"Non è stato possibile aggiornare gli interessi dell'utente: {e}"})
 
-                except pymysql.MySQLError as e:
-                    mysql_conn.rollback()
-                    return jsonify(f"[ERRORE] Non è stato possibile aggiornare gli interssi dell'utente: {e}")
+            token = get_opensky_token()
 
-                except Exception as e:
-                    mysql_conn.rollback()
-                    return jsonify(f"[ERRORE]: {e}")
+            update_flights(mysql_conn, email_utente, OPENSKY_DEPARTURE_ENDPOINT, token, 1)#aggiorna le partenze entro 1 giorno
+            update_flights(mysql_conn, email_utente, OPENSKY_ARRIVAL_ENDPOINT, token, 1)#aggiorna gli arrivi entro l'ultimo giorno
 
-                token = get_opensky_token()
-                update_flights(mysql_conn, email_utente, OPENSKY_DEPARTURE_ENDPOINT, token, 1)#aggiorna le partenze entro 1 giorno
-                update_flights(mysql_conn, email_utente, OPENSKY_ARRIVAL_ENDPOINT, token, 1)#aggiorna gli arrivi entro l'ultimo giorno
+            mysql_conn.close()
 
-                mysql_conn.close()
-            else:
-                return jsonify({"errore": "impossibile connettersi al db"}), 500
+            return jsonify({"message": "Interessi dell'utente inseriti e voli aggiornati"}), 200
         else:
-            # Utente non esiste
-            return jsonify({"errore": "L'utente non esiste"}), 404
+            return jsonify({"error": "Impossibile connettersi al db"}), 503
+    else:
+        return jsonify({"error": "L'utente non esiste"}), 404
 
-    except grpc.RpcError:
-        return jsonify({"errore": "Errore gRPC"}), 502
-
-    return jsonify({"message": "Interessi dell'utente inseriti e voli aggiornati"}), 200
-
+# Dato un aeroporto restituisce l'ultimo volo in partenza e l'ultimo volo in arrivo
 @app.route("/airport/<icao>/last", methods=["GET"])
 def get_last_flight(icao):
     mysql_conn = get_connection()
+
     if not mysql_conn:
-        return jsonify({"error": "Errore: impossibile connettersi al db"}), 500
+        return jsonify({"error": "Impossibile connettersi al db"}), 503
 
     try:
         with mysql_conn.cursor() as cursor:
+            # Ultimo volo in partenza
             sql_last_departure = "SELECT * FROM flight WHERE aeroporto_partenza = %s ORDER BY last_seen DESC LIMIT 1"
             cursor.execute(sql_last_departure, (icao,))
             last_departure = cursor.fetchone()
 
+            # Ultimo volo di arrivo
             sql_last_arrival = "SELECT * FROM flight WHERE aeroporto_arrivo = %s ORDER BY last_seen DESC LIMIT 1"
             cursor.execute(sql_last_arrival, (icao,))
             last_arrival = cursor.fetchone()
+    except pymysql.MySQLError as e:
+        return jsonify({"error": f"Errore MySQL {e}"}), 500
     finally:
         mysql_conn.close()
 
@@ -286,25 +294,31 @@ def get_last_flight(icao):
         "last_arrival": last_arrival
     }), 200
 
-
 @app.route("/airport/<icao>/media", methods=["GET"])
 def get_media_voli(icao):
-    days = int(request.args.get("giorni", 7))  # default 7 giorni se non c'è argomento nella get es GET /airport/LIRF/media?giorni=10
-    now = get_end_unix_time()
-    start = now - days * 86400 #86400 secondi in un giorno
+    days = int(request.args.get("giorni", 7))  # Default = 7 giorni
+    now = get_current_unix_time()
+    start = now - days * 86400 # 86400 secondi in un giorno
 
     mysql_conn = get_connection()
-    if mysql_conn:
-        with mysql_conn.cursor() as cursor:
-            sql_media_voli = "SELECT COUNT(*) AS totale FROM flight WHERE (aeroporto_partenza = %s OR aeroporto_arrivo = %s) AND first_seen >= %s"
-            cursor.execute(sql_media_voli, (icao, icao, start))
 
-            totale = cursor.fetchone()["totale"]
-        mysql_conn.close()
-        media = totale / days
-        return jsonify({"media_voli_giornaliera": media}), 200
+    if mysql_conn:
+        try:
+            with mysql_conn.cursor() as cursor:
+                sql_media_voli = "SELECT COUNT(*) AS totale FROM flight WHERE (aeroporto_partenza = %s OR aeroporto_arrivo = %s) AND first_seen >= %s"
+                cursor.execute(sql_media_voli, (icao, icao, start))
+
+                totale = cursor.fetchone()["totale"]
+
+            mysql_conn.close()
+
+            media = totale / days
+
+            return jsonify({"media_voli_giornaliera": media}), 200
+        except pymysql.MySQLError as e:
+            logging.error("Errore MySQL. Non è stato possibile calcolare la media dei voli")
     else:
-        return jsonify("Errore: impossibile connettersi al db"), 500
+        return jsonify({"errore": "Impossibile connettersi al db"}), 503
 
 class DataCollectorService(user_service_pb2_grpc.DataServiceServicer):
     def DeleteUserInterests(self, request, context):
@@ -317,15 +331,15 @@ class DataCollectorService(user_service_pb2_grpc.DataServiceServicer):
                 try:
                     cursor.execute("DELETE FROM user_airports WHERE email_utente=%s", (email,))
                     mysql_conn.commit()
-
-                except pymysql.MySQLError as e:
+                except pymysql.MySQLError:
                     mysql_conn.rollback()
+
                     return user_service_pb2.DeleteUserInterestsResponse(
                         deleted = False,
                         message=f"Non è stato possibile eliminare gli interssi dell'utente {email}"
                     )
-
-            mysql_conn.close()
+                finally:
+                    mysql_conn.close()
 
             return user_service_pb2.DeleteUserInterestsResponse(
                 deleted = True,
