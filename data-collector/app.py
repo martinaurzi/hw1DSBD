@@ -173,8 +173,6 @@ def update_flights(mysql_conn, email_utente, opensky_endpoint, token, days):
                             except pymysql.MySQLError as e:
                                 mysql_conn.rollback()
                                 logging.error(f"Errore nell'inserimento del volo corrente nella tabella flight {e}")
-                            finally:
-                                mysql_conn.close()
 
             except requests.exceptions.HTTPError as errh:
                     logging.error(f"Errore HTTP. Non è stato possibile recuperare i voli da OpenSky: {errh.args[0]}")
@@ -214,11 +212,10 @@ def update_all_flights():
 
 # Questa funzione permette di aggiornare in modo ciclico (ogni 12 ore) i voli relativi agli aeroporti a cui gli utenti sono interessati
 def scheduler_job():
-    while True:
-        with app.app_context():
-            update_all_flights()
+    with app.app_context():
+        update_all_flights()
 
-        time.sleep(12 * 3600)
+    threading.Timer(12 * 3600, scheduler_job).start()
 
 @app.route("/")
 def home():

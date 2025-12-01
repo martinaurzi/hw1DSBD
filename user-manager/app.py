@@ -63,7 +63,7 @@ def clear_cache():
 
 @app.route("/")
 def home():
-    return jsonify(message="Hello"), 200
+    return jsonify({"message": "Hello User Manager!"}), 200
 
 @app.route("/users", methods=["POST"])
 def create_user():
